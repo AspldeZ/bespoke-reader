@@ -1,92 +1,137 @@
-# 量体裁书 Bespoke Reader
+# Bespoke Reader
 
-按读者与一本书之间的认知差距裁剪原书：保留该读的原文，删去已经懂的部分，在难以独立跨过的地方加批注，最后生成一本个人版 EPUB。
+*Your book, cut to your measure.*
 
-适用于 Claude 的 Agent Skill。
+**English** | [简体中文](README.zh-CN.md)
 
-## 为什么需要它
+Bespoke Reader tailors a whole book to one reader. It measures the gap between you and the book, keeps the original text you need, cuts what you already know, annotates the places you cannot yet cross alone, and hands you a personal EPUB.
 
-一本书与读者之间，几乎总存在错位。有些章节讲的是早已熟悉的内容，有些段落高于当前的理解，还有一些地方默认读者具备某种背景知识，而读者往往并不知道自己缺少它。三种错位都在消耗阅读时间，真正被吸收的部分却很有限。
+An Agent Skill for Claude (apps and Claude Code), Codex, and other agents that support `SKILL.md`.
 
-常见的替代方案是解说、导读与摘要。它们节省时间，代价是由他人决定哪些值得知道，原作的论证过程、语言质感与作者的思考方式随之消失。读到的是结论，而非一本书。
+## Why it exists
 
-量体裁书处于两者之间。它不替读者读书，也不改写原作，只做一件事：先测出这位读者与这本书之间的差距，再依据差距决定原文的去留。留下来的仍是作者本人的文字。
+A book and its reader are almost never aligned. Some chapters cover what you already know. Some passages sit above your current understanding. Others assume background you lack, and you often do not know you lack it. All three misalignments consume reading time, while the part you actually absorb stays small.
 
-## 工作方式
+The usual alternatives are summaries, explainers, and guided readings. They save time, but someone else decides what is worth knowing, and the author's argument, the texture of the language, and the way the author thinks disappear along the way. What remains is a set of conclusions, not a book.
 
-**1. 通读全书，判断类型**
-识别书的类型（论证型非虚构、科普、方法类、学术专著、历史、哲学、小说、诗歌戏剧等 15 类），不同类型的价值单位与裁剪方式不同。哲学、严肃文学、诗歌与推理小说原则上不删，只加注释。
+Bespoke Reader sits between the two. It does not read the book for you and does not rewrite it. It measures the gap between this reader and this book, then decides which parts of the original stay. Everything you read is still the author's own words.
 
-**2. 用书本身出题校准**
-不询问读者的水平，而是从这本书中提取论断与推理链，以选择题测量差距。整个校准不超过 20 题，并根据前一批回答自适应调整。
+## How it works
 
-- 主题层：对全书思想脉络与核心概念的熟悉程度
-- 论断探针：书中特有的论断，读者是早已知道、听过未深想、全新，还是不同意
-- 自评核实：抽查标为“早就知道”的项，防止高估
-- 思维探针：推理深度、框架迁移、缺环补全，测出作者多走了哪几步
+**1. Read the whole book and identify its type**
+Fifteen types (argument, popular science, method, academic monograph, history, philosophy, fiction, poetry and drama, and more) each have their own unit of value and their own way of being trimmed. Philosophy, literary fiction, poetry, and detective fiction are never cut, only annotated.
 
-**3. 生成差距图，确认后再动手**
-差距分为四类，处理方式各不相同：
+**2. Calibrate with questions drawn from the book**
+It never asks about your level. It turns the book's own claims and reasoning chains into multiple-choice questions, at most 20, adapting each batch to your previous answers.
 
-| 差距 | 含义 | 处理 |
+- Topic layer: how familiar you are with the book's tradition and core concepts
+- Claim probes: the book's specific claims; did you know it, hear of it without thinking it through, find it new, or disagree
+- Self-assessment checks: spot-checks on what you marked as "knew it", to catch overestimation
+- Thinking probes: reasoning depth, framework transfer, missing links; where your reasoning stops and how many steps further the author goes
+
+**3. Show the gap map, and wait for your confirmation**
+
+| Gap | Meaning | Treatment |
 |---|---|---|
-| 已覆盖 | 读者已知且通过核实 | 压成一行或删去 |
-| 知识差 | 缺少书中的概念或背景 | 保留原文，补背景卡 |
-| 观念差 | 读者持不同看法 | 完整保留，附作者前提与反驳 |
-| 思维差 | 读者尚不具备作者的推理方式 | 最高优先级，重点标出 |
+| Covered | You know it, and passed a check | Compressed to one line or cut |
+| Knowledge gap | You lack a concept or background | Original kept, background card added |
+| View gap | You hold a different view | Kept in full, with the author's premises and counterarguments |
+| Thinking gap | You do not yet have the author's way of reasoning | Highest priority, marked as key |
 
-同时结合阅读目的与时间预算，计算保留字数与预计阅读时间。预算容不下关键段落时，交由读者决定，而不是替读者删掉。
+Your reading goal and time budget then set the retained length and estimated reading time. When the budget cannot hold the essential passages, you decide; nothing essential is cut on your behalf.
 
-**4. 裁剪与批注，输出 EPUB**
-批注只指出机制与可迁移之处，不复述内容。成品可直接在微信读书、Apple Books 等阅读器中打开。
+**4. Trim, annotate, and build the EPUB**
+Annotations point to mechanisms and what transfers beyond the book; they do not restate content. The EPUB opens directly in Apple Books, WeChat Read, and other reader apps.
 
-## 成品包含什么
+## Example: *Antifragile*
 
-- **前置章**：差距图、背景卡、全书骨架、按类型附加的工具卡（概念依赖图、时间线、方法卡、人物关系图等）
-- **正文**：按原书顺序排列的原文，带以下标记
-  - `〔略读〕` 概括处理的段落
-  - `〔删去 N 段：原因〕` 删减位置与理由
-  - `〔批注〕` 机制分析
-  - `〔先想〕` 读前预测题
-  - `〔别跳〕` 与读者立场相左、最值得读的段落
-- **后置章**：作者层分析（这些想法从何而来）、现实映射、局限与反驳、删减日志
+Nassim Nicholas Taleb, *Antifragile: Things That Gain from Disorder* (2012).
 
-## 设计原则
+<!-- Replace the numbers below with the results of the demo run. -->
 
-- 只测量读者与这本书的差距，不评价读者的整体水平。
-- 未经读者确认差距图，不开始删减。
-- 未经核实的“早就知道”只做概括，不直接删去。
-- 每本书强制保留一到三处与读者立场相左的段落，避免工具只确认已有的观念。
-- AI 的推演与作者观点严格区分。
-- 读前模式下不剧透。
+| | |
+|---|---|
+| Reading goal | _TBD_ |
+| Time budget | _TBD_ |
+| Original length | _TBD_ words |
+| Retained | _TBD_ words (_TBD_%) |
+| Estimated reading time | _TBD_ |
 
-## 安装
+**Calibration questions**
 
-仓库中的 `bespoke-reader/` 文件夹即为技能本体，核心文件是 `SKILL.md`。运行需要开启代码执行能力（用于解析与打包 EPUB）。
+![Calibration questions](examples/antifragile/en-01-calibration.png)
 
-**Claude 应用（网页或桌面端）**
-将 `bespoke-reader/` 文件夹压缩为 zip，在设置的技能（Skills）页面上传。
+**Gap map**
+
+![Gap map](examples/antifragile/en-02-gap-map.png)
+
+**A page of the tailored book**
+
+![Tailored page with markers](examples/antifragile/en-03-page.png)
+
+**A "Don't skip" passage**
+
+![Don't skip passage](examples/antifragile/en-04-dont-skip.png)
+
+The full EPUB is not included in this repository because it contains the book's text.
+
+## What you get
+
+- **Front matter**: gap map, background cards, a one-page skeleton of the book, and type-specific cards (concept maps, timelines, method cards, character maps)
+- **Body**: the original text in its original order, with markers
+  - `[Skim]` summarized passage
+  - `[Cut N ¶: reason]` where and why something was cut
+  - `[Note]` annotation on mechanism
+  - `[Predict]` a question to think about before reading on
+  - `[Don't skip]` a passage that challenges your position and is most worth reading
+- **Back matter**: where the author's ideas come from, present-day mapping, limits and counterarguments, and a full cut log
+
+Chinese readers get the same structure with Chinese markers (`〔略读〕` `〔批注〕` `〔别跳〕` …). Questions, annotations, and markers always follow your language; the book's text stays in its own language.
+
+## Design principles
+
+- Measures only the gap between you and this book; never grades your overall level.
+- Nothing is cut before you confirm the gap map.
+- An unverified "knew it" is summarized, never cut.
+- Every book keeps one to three passages that oppose your position, so the tool never simply confirms what you already believe.
+- AI extrapolation is always kept separate from the author's views.
+- No spoilers in pre-reading mode.
+
+## Installation
+
+The `bespoke-reader/` folder is the skill itself (`SKILL.md` plus `scripts/`). The host must be able to run Python to parse and package EPUB files.
+
+```bash
+git clone https://github.com/<username>/bespoke-reader.git
+```
+
+**Claude apps (web or desktop)**
+Zip the `bespoke-reader/` folder and upload it on the Skills page in Settings. Code execution must be enabled.
 
 **Claude Code**
 ```bash
-git clone https://github.com/<用户名>/bespoke-reader.git
 cp -r bespoke-reader/bespoke-reader ~/.claude/skills/
 ```
 
-## 使用
+**Codex**
+```bash
+cp -r bespoke-reader/bespoke-reader ~/.agents/skills/
+```
 
-上传一本书的 EPUB 文件，然后输入以下任一触发词：
+## Usage
 
-- 差距阅读
-- 帮我拆这本书
-- 按我的水平处理这本书
+Give the agent a book file (EPUB preferred; PDF and TXT also work) and say any of:
 
-随后按提示回答阅读目的、时间预算与校准选择题即可。
+- "Tailor this book to me"
+- "Bespoke reading"
+- "Cut this book to my level"
 
-## 版权说明
+Then answer the questions about your goal, time budget, and calibration.
 
-成品包含原书文字，仅供持有该书的读者个人阅读使用，请勿公开传播。
+## Copyright
 
-## 许可证
+The output contains the book's text. It is for the personal use of a reader who owns the book. Do not share it publicly.
+
+## License
 
 MIT

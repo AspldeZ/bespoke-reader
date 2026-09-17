@@ -1,364 +1,338 @@
 ---
 name: bespoke-reader
-description: "量体裁书（差距阅读器）：用户上传整本书（epub等），测出用户与书的认知差距，结合阅读目的与时间预算大量删减，生成个人阅读路线与批注。触发词：「差距阅读」「帮我拆这本书」「按我的水平处理这本书」。"
+description: "Bespoke Reader 量体裁书: tailors a whole book (EPUB, PDF, TXT) to one reader. Measures the gap between reader and book with multiple-choice questions drawn from the book itself, trims the original text by reading goal and time budget, annotates what the reader cannot yet cross alone, and outputs a personal EPUB. Triggers: \"tailor this book\", \"bespoke reading\", \"gap reading\", \"cut this book to my level\"; 「量体裁书」「差距阅读」「帮我拆这本书」「按我的水平处理这本书」."
 ---
 
-# 差距阅读器 v0.4
+# Bespoke Reader v0.5
 
-核心原则：不定位用户的绝对水平，只测量**用户与这本书之间的差距**。差距决定删什么、留什么、批注什么；**阅读目的**决定侧重；**时间预算**决定总量上限。
+Core principle: do not locate the reader's absolute level. Measure only **the gap between this reader and this book**. The gap decides what is cut, kept, and annotated; the **reading goal** decides emphasis; the **time budget** caps the total.
 
-v0.4 相对 v0.3 的变化：自评核实与自适应出题（第 2 步）；阅读目的与时间预算（第 2 步第 0 批、第 4 步预算分配）；书的类型细分为 15 类，并按类型调整校准与加工（第 1 步、第 2 步、第 4 步）。
+## Host and language conventions
 
-## 差距的四种类型
+This skill runs on any agent that can read files, run Python, and write files (Claude apps, Claude Code, Codex, and similar).
 
-| 类型 | 含义 | 处理 |
+- **Questions**: every calibration and confirmation step is multiple choice. If the host offers a structured question tool, use it, at most 4 questions per batch. Otherwise, post the batch in chat as numbered questions with lettered options and wait for the answers before continuing.
+- **Working files**: keep intermediate files in `bespoke-work/<book-slug>/` under the current working directory (or the host's scratch directory).
+- **Output**: write the final file to the host's designated output directory if one exists, otherwise to `./output/`, then deliver it through whatever mechanism the host provides for sending files to the user.
+- **Language**: talk to the reader, write questions, annotations, cards, and markers in **the reader's language** (the language of their messages, unless they ask otherwise). Original text always stays in the book's own language and is never translated in place.
+
+**Markers** (use the column matching the reader's language; for other languages, translate the English column):
+
+| Purpose | English | 中文 |
 |---|---|---|
-| 已覆盖（实测） | 用户已知，且通过核实题 | 压成一行或删去 |
-| 已覆盖（推定） | 用户自评已知，未核实 | 改为略读概括，不删 |
-| 知识差 | 书中概念、背景用户不知道 | 保留，补背景 |
-| 观念差 | 用户持不同看法或不同意 | 完整保留，附反驳与作者前提 |
-| 思维差 | 作者的推理方式用户没有 | 最高优先级，标为重点 |
+| Summarized passage | `[Skim]` | `〔略读〕` |
+| Cut passage | `[Cut N ¶: reason]` | `〔删去 N 段：原因〕` |
+| Annotation | `[Note]` | `〔批注〕` |
+| Prediction prompt | `[Predict]` | `〔先想〕` |
+| Must-read passage | `[Don't skip]` | `〔别跳〕` |
+| Self-test | `[Self-test]` | `〔自测〕` |
 
-思维差最有价值，也最难测，校准时要单独设计题目测它。
+## Kinds of gap
 
-## 流程
+| Kind | Meaning | Treatment |
+|---|---|---|
+| Covered (verified) | Reader knows it and passed a check question | Compress to one line or cut |
+| Covered (assumed) | Reader claims to know it, not verified | Summarize as a skim, never cut |
+| Knowledge gap | Reader lacks a concept or background the book uses | Keep, add background |
+| View gap | Reader holds a different view or disagrees | Keep in full, add the author's premises and counterarguments |
+| Thinking gap | Reader lacks the author's way of reasoning | Highest priority, mark as key |
 
-### 第 0 步：提取全书
+Thinking gaps are the most valuable and the hardest to measure; calibration must include questions designed for them.
 
-用下面的脚本把 epub 拆成按章文本，每段带定位编号 `[章.段]`：
+## Workflow
 
-```python
-# 用法：python3 ex.py book.epub outdir
-import zipfile, sys, os, re, posixpath
-from xml.etree import ElementTree as ET
-from html.parser import HTMLParser
-BLOCK={'p','div','h1','h2','h3','h4','h5','h6','li','blockquote','br','tr'}
-class Ext(HTMLParser):
-    def __init__(s): super().__init__(); s.buf=[]; s.out=[]; s.skip=0
-    def handle_starttag(s,t,a):
-        if t in ('script','style'): s.skip+=1
-        if t in BLOCK: s.flush()
-    def handle_endtag(s,t):
-        if t in ('script','style'): s.skip-=1
-        if t in BLOCK: s.flush()
-    def handle_data(s,d):
-        if not s.skip: s.buf.append(d)
-    def flush(s):
-        x=re.sub(r'\s+',' ',''.join(s.buf)).strip(); s.buf=[]
-        if x: s.out.append(x)
-src,out=sys.argv[1],sys.argv[2]; os.makedirs(out,exist_ok=True)
-z=zipfile.ZipFile(src)
-opf=ET.fromstring(z.read('META-INF/container.xml')).find('.//{*}rootfile').get('full-path')
-o=ET.fromstring(z.read(opf)); base=posixpath.dirname(opf)
-man={i.get('id'):i.get('href') for i in o.find('{*}manifest')}
-spine=[r.get('idref') for r in o.find('{*}spine')]
-title=o.findtext('.//{http://purl.org/dc/elements/1.1/}title') or ''
-rows=[]; n=0
-for idref in spine:
-    href=man.get(idref)
-    if not href: continue
-    path=posixpath.normpath(posixpath.join(base,href.split('#')[0]))
-    try: raw=z.read(path).decode('utf-8','ignore')
-    except KeyError: continue
-    e=Ext(); e.feed(raw); e.flush()
-    chars=sum(len(p) for p in e.out)
-    if chars<200: continue
-    n+=1; fn=f'ch{n:03d}.txt'
-    with open(os.path.join(out,fn),'w') as f:
-        for i,p in enumerate(e.out,1): f.write(f'[{n}.{i}] {p}\n')
-    rows.append((fn,len(e.out),chars,e.out[0][:40]))
-with open(os.path.join(out,'index.tsv'),'w') as f:
-    f.write(f'# {title}\n')
-    for r in rows: f.write('\t'.join(map(str,r))+'\n')
-print(title,len(rows),'chapters',sum(r[2] for r in rows),'chars')
+### Step 0: Extract the whole book
+
+Run `scripts/extract_epub.py` (bundled with this skill):
+
+```bash
+python3 <skill-dir>/scripts/extract_epub.py book.epub bespoke-work/<book-slug>/text
 ```
 
-章号按 epub 的 spine 顺序编，不一定等于书中章号，所以定位时同时给出段首文字。一个 spine 文件可能包含多篇文章，用短行（标题）识别篇目。PDF 或 txt 用对应工具提取为同样格式。
+It splits the EPUB into per-chapter text files where every paragraph carries a locator `[chapter.paragraph]`, and writes `index.tsv`. Chapter numbers follow the EPUB spine and may differ from the printed numbering, so when citing a location also give the opening words of the paragraph. One spine file may contain several pieces; detect titles by short lines. For PDF or TXT, extract with available tools into the same format.
 
-单个文件往往太大，一次读不完。按行边界切成约 27KB 的块，逐块读完全书，不要只读开头。
+Chapter files are often too large to read at once. Read them in chunks of about 27 KB, cut at line boundaries, and read the **entire** book, not only the beginning.
 
-### 第 1 步：第一遍通读，建立书的结构，判断类型
+### Step 1: First pass, structure and type
 
-读完后写 `notes/overview.md`：类型与价值单位、注水率估计、全书总字数、核心论证链、高价值段落编号（思维差候选）、作者层线索（出身、写作处境、自我形象、自相矛盾处、自我怀疑处）、可疑的轶事与引文、出版年份（科普、实用、学术类用于判断结论是否过时）。
+Write `notes/overview.md`: type and value unit, estimated padding ratio, total length, core argument chain, high-value paragraph locators (thinking-gap candidates), author-level clues (background, writing situation, self-image, contradictions, moments of self-doubt), suspicious anecdotes and quotations, publication year (for science, practical, and academic books, to judge what is outdated).
 
-**类型总表**
+**Type table**
 
-| 大类 | 类型 | 价值单位 | 模式 | 基准保留率 |
+| Family | Type | Value unit | Mode | Base retention |
 |---|---|---|---|---|
-| 非虚构 | 论证型（社会评论、政治、文化批评） | 论断 | 删减 | 15% 到 20% |
-| 非虚构 | 科普与学科导论 | 概念、模型、关键证据 | 删减 | 20% 到 30% |
-| 非虚构 | 实用、方法、商业、自我提升 | 方法及其适用条件 | 重度删减，转为方法卡 | 5% 到 10% |
-| 非虚构 | 学术专著、经典教科书 | 论证、方法、在学术脉络中的位置 | 删减综述，保留方法与论证 | 25% 到 40% |
-| 非虚构 | 历史 | 转折点与解释框架 | 删减编年，保留解释 | 15% 到 25% |
-| 非虚构 | 传记、回忆录 | 关键决策与自我叙述的建构 | 删减 | 15% 到 25% |
-| 非虚构 | 散文、随笔、文集 | 观察与语言 | 按篇筛选，不按段删 | 30% 到 50%（整篇保留或整篇删去） |
-| 非虚构 | 访谈、演讲集 | 独到回答 | 删减重复与寒暄 | 10% 到 20% |
-| 哲学 | 体系型（论证连贯的专著） | 论证步骤 | 注释，几乎不删 | 80% 以上 |
-| 哲学 | 格言、断片、对话型 | 核心命题与主题关联 | 注释，按主题重组索引 | 80% 以上 |
-| 小说 | 推理小说 | 诡计与结构 | 读后拆解，不改动顺序 | 不删 |
-| 小说 | 科幻、奇幻（设定驱动） | 设定及其后果、关键场景 | 读前或读后模式 | 读前给跳读标记 |
-| 小说 | 严肃文学 | 形式、叙述视角、意象系统 | 读后精读注释，原则上不删 | 不删 |
-| 小说 | 类型小说、长篇网文 | 主线情节与人物转变 | 跳读标记 | 按主线保留 20% 到 40% |
-| 诗歌戏剧 | 诗集、剧本 | 意象、典故、冲突结构 | 注释，不删 | 不删 |
+| Nonfiction | Argument (social commentary, politics, cultural criticism) | Claims | Cut | 15–20% |
+| Nonfiction | Popular science, subject introductions | Concepts, models, key evidence | Cut | 20–30% |
+| Nonfiction | Practical, method, business, self-help | Methods and their conditions | Heavy cut, convert to method cards | 5–10% |
+| Nonfiction | Academic monograph, classic textbook | Argument, method, place in the literature | Cut surveys, keep method and argument | 25–40% |
+| Nonfiction | History | Turning points, explanatory frameworks | Cut chronicle, keep explanation | 15–25% |
+| Nonfiction | Biography, memoir | Key decisions, construction of self-narrative | Cut | 15–25% |
+| Nonfiction | Essays, collections | Observation and language | Select whole pieces, never cut within a piece | 30–50% |
+| Nonfiction | Interviews, speeches | Distinctive answers | Cut repetition and pleasantries | 10–20% |
+| Philosophy | Systematic treatise | Argument steps | Annotate, almost no cuts | 80%+ |
+| Philosophy | Aphorisms, fragments, dialogues | Core propositions and thematic links | Annotate, build a thematic index | 80%+ |
+| Fiction | Detective fiction | Puzzle and structure | Post-reading breakdown, never reorder | No cuts |
+| Fiction | Science fiction, fantasy (setting-driven) | Setting and its consequences, key scenes | Pre- or post-reading mode | Pre-reading: skip markers only |
+| Fiction | Literary fiction | Form, point of view, image systems | Post-reading close annotation, no cuts | No cuts |
+| Fiction | Genre fiction, long web serials | Main plot, character change | Skip markers | Keep 20–40% along the main line |
+| Poetry, drama | Poetry collections, plays | Images, allusions, conflict structure | Annotate, no cuts | No cuts |
 
-**混合型**：一本书可能由不同类型的章节组成（例如叙事章与论证章交替、回忆录中夹杂方法论）。判断主类型后，逐章标注次类型，第 4 步按章适用对应规则。
+**Mixed books**: chapters may belong to different types (narrative and argument alternating, method inside memoir). Decide the main type, tag each chapter with its own type, and apply per-chapter rules in Step 4.
 
-小说类要先问用户：读过了还是没读过（决定读前或读后模式）。
+For fiction, first ask whether the reader has already read it (this selects pre- or post-reading mode).
 
-### 第 2 步：校准（最关键）
+### Step 2: Calibration (the critical step)
 
-不问用户“你是什么水平”，只用书本身出题。**整个校准全部用 AskUserQuestion 选择题完成，不在流程中插入开放式主观题**，保持自动化流程的连贯。每批最多 4 题。
+Never ask "what is your level". Build every question from the book. **The entire calibration is multiple choice; no open-ended questions are inserted**, so the flow stays uninterrupted. At most 4 questions per batch.
 
-**批次顺序与总量**
+**Batch order and limits**
 
-| 批次 | 内容 |
+| Batch | Content |
 |---|---|
-| 第 0 批 | 阅读目的、时间预算、阅读语言与速度，小说加问是否读过；阅读器可在此批或最后一批中问 |
-| 第 1 批 | A 主题层 |
-| 第 2 至 3 批 | B 论断探针（按自适应规则增减） |
-| 第 4 批 | B′ 自评核实与 C 思维探针 |
-| 第 5 批 | C 剩余题（如需要） |
+| 0 | Reading goal, time budget, reading language and speed; for fiction, whether already read; target reader app may be asked here or in the last batch |
+| 1 | A: topic layer |
+| 2–3 | B: claim probes (adjusted by the adaptive rules) |
+| 4 | B′: self-assessment checks, and C: thinking probes |
+| 5 | Remaining C questions if needed |
 
-全部校准（含第 0 批）不超过 20 题、6 批。自适应规则减少的题数不必补足。
+Whole calibration, batch 0 included: at most 20 questions in 6 batches. Questions removed by adaptive rules are not replaced.
 
-**第 0 批：目的与预算**
+**Batch 0: goal and budget**
 
-1. 阅读目的（单选）：
-   - 系统掌握（课程、论文、工作需要）
-   - 抓住核心思想
-   - 学作者怎么想（思维训练）
-   - 批判性阅读，准备写评论或反驳
-   - 了解大意，够谈论即可
-2. 时间预算（单选）：2 小时以内 / 2 到 5 小时 / 5 到 10 小时 / 不限
-3. 阅读语言与速度（单选）：母语、读得快 / 母语、正常速度 / 非母语、能流畅阅读 / 非母语、需要查词
+1. Reading goal (single choice): master it systematically (course, thesis, work) / grasp the core ideas / learn how the author thinks / read critically, to review or rebut / get the gist, enough to discuss it
+2. Time budget: under 2 hours / 2–5 hours / 5–10 hours / unlimited
+3. Reading language and speed: native, fast / native, normal / non-native, fluent / non-native, needs a dictionary
 
-对应的默认有效速度（原文，含读批注的时间）：中文书母语快读 450 字每分钟，正常 300，非母语流畅 150，查词 80。外文书按词计，母语快读 250 词每分钟，正常 180，非母语流畅 100，查词 50。反馈回路中用户可修正。
+Default effective speeds for original text, including time spent on annotations:
 
-**A. 主题层（3 到 4 题，先于论断探针）**
-论断探针有一个前提：用户对全书主题有理解基础。所以先测大主题上的认知底座：书所属的思想脉络、核心概念框架、成书年代与时代语境。选项：能讲清并评价 / 知道大意 / 只听过名词 / 陌生。标为“陌生”的项，成品开头必须补一张背景卡；“只听过名词”的项建议也补。
+| | Native fast | Native normal | Non-native fluent | With dictionary |
+|---|---|---|---|---|
+| CJK text (characters/min) | 450 | 300 | 150 | 80 |
+| Alphabetic text (words/min) | 250 | 180 | 100 | 50 |
 
-**B. 论断探针（基准 8 题，自适应范围 5 到 10 题）**，每题一句话，选项固定为：
-- 早就知道
-- 听过，没深想
-- 新的
-- 不同意
+The reader can correct these in the feedback loop.
 
-出题规则：
-- 写**这本书特有的版本**，不写人人都会同意的常识。
-- 至少一题反直觉，至少一题是全书最核心的论断。
-- 覆盖全书前、中、后部，避免只测开头。
-- **压缩时不得改变作者立场的强弱与范围。**例如作者“承认某事有客观作用，但反对赞美它”，不能压缩成“作者否认其作用”。否则用户的“不同意”测到的是探针的失真，不是真实的观念差。
-- 读前模式下，探针只涉及前提与主题，不泄露情节。
+**A. Topic layer (3–4 questions, before claim probes)**
+Claim probes assume the reader has a foundation in the book's subject, so test that first: the intellectual tradition the book belongs to, its core conceptual framework, its era and context. Options: can explain and evaluate it / know the gist / have only heard the term / unfamiliar. Every "unfamiliar" item requires a background card at the front of the output; "only heard the term" items should get one too.
 
-**B′. 自评核实（1 到 3 题）**
-用户自评“早就知道”常有高估。对标为“早就知道”的探针抽查：
-- 抽查数量：“早就知道”占 B 类一半以下时抽 1 题；一半及以上时抽 2 到 3 题。优先抽全书最核心的论断。
-- 题型：针对该论断出一道缺环题或框架迁移题（见 C 类题型 2、3），4 个选项加“不确定”。正确项必须依赖这本书特有的版本，只懂常识版本的人应当选错。
-- 判读：答对，该项记为“已覆盖（实测）”；答错或选“不确定”，降为“听过，没深想”，按知识差或思维差处理。
-- 抽查中有一题降级时，其余未抽查的“早就知道”一律记为“已覆盖（推定）”，加工时改为略读概括而不删去；全部答对时，未抽查项记为“已覆盖（实测）”。
-- 校准过程中不公布答案，答案与判读在第 3 步差距图中给出。
-- 核实题测的若是作者特有的推理步骤，可同时计入 C 类思维探针的题数。
+**B. Claim probes (8 by default, adaptive range 5–10)**, one sentence each, fixed options:
+- Knew it already
+- Heard of it, never thought it through
+- New to me
+- Disagree
 
-**C. 思维探针（2 到 4 题，全部为选择题）**
-目的是看用户的推理停在哪一步、作者多走了哪几步。从下列题型中选两到三种，不用开放回答：
+Rules:
+- Write **this book's specific version** of a claim, not a truism everyone accepts.
+- At least one counterintuitive claim, and at least one of the book's most central claims.
+- Cover the beginning, middle, and end of the book.
+- **Compression must not change the strength or scope of the author's position.** If the author "admits X has an objective function but refuses to praise it", do not compress to "the author denies X's function". Otherwise "Disagree" measures distortion in the probe, not a real view gap.
+- In pre-reading mode, probes touch only premises and themes, never plot.
 
-1. **推理深度梯**：取书中核心问题，给出 3 到 4 个答案，分别对应不同深度的推理（表层归因、作者表层自述、作者的深层机制、超出作者的反思，例如指出作者自身的盲点）。问“哪一个最接近你的判断”。选项按内容写，不标深浅，顺序打乱，不暗示哪个是作者的答案。
-2. **框架迁移题**：给出书外的一个具体情境（同时代的另一事件，或当下真实现象），问“按作者的思路，这里的关键错误或机制是什么”。正确项对应作者可迁移的推理方式，干扰项是常见但浅的解释，另留一项“作者的思路在此不适用”，给有反驳能力的用户留出口。
-3. **缺环题**：把作者的一条推理链写出来，挖掉最关键的一步，给 4 个候选。缺环必须是作者独特的一步，而不是常识性的连接。
-4. **立场强度题（替代“不同意”的理由追问）**：针对书中最宽泛或最有争议的一两个论断，给出分级态度：成立 / 部分成立但难以检验（如民族性格解释） / 不成立，另有更好的解释（写出替代解释） / 没想过。用来区分“不同意”与“觉得说得太满”，这两者在 B 类探针中无法区分。
+**B′. Self-assessment checks (1–3 questions)**
+"Knew it already" is often an overestimate. Spot-check those items:
+- Number: 1 check if "knew it" is under half of the B answers; 2–3 if half or more. Prefer the most central claims.
+- Format: a missing-link or framework-transfer question (C types 2 and 3) with 4 options plus "Not sure". The correct option must depend on this book's specific version; someone who only knows the common version should choose wrong.
+- Scoring: correct means Covered (verified); wrong or "Not sure" downgrades to "heard of it, never thought it through" and it is handled as a knowledge or thinking gap.
+- If any check is downgraded, all unchecked "knew it" items become Covered (assumed): summarized, not cut. If all checks pass, unchecked items count as Covered (verified).
+- Do not reveal answers during calibration; answers and scoring appear in the Step 3 gap map.
+- A check that tests an author-specific reasoning step may also count toward the C quota.
 
-判读：推理深度梯选到表层项，或框架迁移题选错，记为思维差；选到“超出作者”项，说明用户在该问题上领先作者，相关段落改为批判性阅读，批注侧重作者盲点。立场强度题选“部分成立”或“不成立”，记为观念差并在批注中展开；选“成立”且作者立场本身有争议，该处设为“别跳”。
+**C. Thinking probes (2–4 questions, all multiple choice)**
+Goal: find where the reader's reasoning stops and how many further steps the author takes. Choose two or three of these formats:
 
-**D. 预测题（1 题，可选，选择题形式）**：给出某个论证或情节的起点，给 3 到 4 个走向，其中一个是书中实际走向。不在校准时问，放进成品对应章节前，以“〔先想〕”开头，答案放在该段之后的批注里。
+1. **Reasoning depth ladder**: take a core question of the book and give 3–4 answers of different depth (surface attribution, the author's surface explanation, the author's deeper mechanism, a reflection beyond the author such as the author's own blind spot). Ask which is closest to the reader's judgment. Word options by content, never label depth, shuffle order, never hint which is the author's.
+2. **Framework transfer**: give a concrete situation outside the book (another event of the same period, or a real present-day phenomenon) and ask what the key error or mechanism is by the author's logic. The correct option is the author's transferable reasoning; distractors are common but shallow explanations; add "The author's logic does not apply here" as an exit for readers able to rebut.
+3. **Missing link**: write out one of the author's reasoning chains, remove its most crucial step, offer 4 candidates. The missing step must be distinctive to the author, not a common-sense connection.
+4. **Position strength** (replaces asking why the reader disagrees): for the one or two broadest or most contested claims, offer graded attitudes: holds / partly holds but hard to test (e.g., national-character explanations) / does not hold, a better explanation exists (write that explanation) / never thought about it. This separates "disagree" from "overstated", which B probes cannot.
 
-**自适应规则**
+Scoring: a surface option on the depth ladder, or a wrong framework-transfer answer, records a thinking gap. Choosing the "beyond the author" option means the reader is ahead of the author on that question: switch related passages to critical reading and aim annotations at the author's blind spots. "Partly holds" or "does not hold" on position strength records a view gap to be developed in annotations; "holds" on a contested claim makes that passage a Don't skip.
 
-根据前一批结果调整下一批，不预先固定题数：
-- **A 层全部为“陌生”或“只听过名词”**：B 类减到 5 到 6 题，只测核心论断与主题入门；C 类用缺环题和立场强度题，不用推理深度梯（底座薄时区分度低）；背景卡全部补齐。
-- **A 层全部为“能讲清并评价”**：B 类减到 5 到 6 题，只出反直觉和作者特有的版本；C 类增至 4 题，必出推理深度梯与框架迁移题。
-- **B 类第一批 4 题全部“早就知道”**：第二批改用更深、更贴近作者特有表述的论断；B′ 核实至少 2 题。
-- **B 类第一批 4 题全部“新的”**：不再加 B 类题，差距主要是知识差，转为背景卡与知识差加工，C 类保留 2 题。
-- **某一部分（前、中、后）已有 2 题标“早就知道”且其中一题通过核实**：该部分不再出 B 类题，剩余论断记为“已覆盖（推定）”。
-- **阅读目的为“了解大意”**：C 类减到 2 题，B′ 只抽 1 题。
-- **阅读目的为“学作者怎么想”或“批判性阅读”**：C 类至少 3 题，其中必有立场强度题。
+**D. Prediction prompt (1, optional, multiple choice)**: give the starting point of an argument or plot and 3–4 possible directions, one of which is the book's. Not asked during calibration; placed before the relevant chapter under the Predict marker, with the answer in the annotation after the passage.
 
-**按类型调整校准**
+**Adaptive rules**
 
-| 类型 | 调整 |
+Adjust each batch based on the previous one:
+- **Topic layer all "unfamiliar" or "only heard the term"**: B down to 5–6, core claims and entry-level themes only; C uses missing-link and position-strength questions, not the depth ladder (low discrimination on a thin foundation); add all background cards.
+- **Topic layer all "can explain and evaluate"**: B down to 5–6, counterintuitive and author-specific versions only; C up to 4, must include depth ladder and framework transfer.
+- **First 4 B probes all "knew it"**: the next batch uses deeper claims closer to the author's specific wording; B′ checks at least 2.
+- **First 4 B probes all "new"**: no more B questions; the gap is mainly knowledge, so shift to background cards and knowledge-gap processing; keep 2 C questions.
+- **A section (beginning, middle, end) already has 2 "knew it" answers and one passed a check**: no more B questions for that section; its remaining claims count as Covered (assumed).
+- **Goal is "get the gist"**: C down to 2, B′ checks only 1.
+- **Goal is "learn how the author thinks" or "read critically"**: C at least 3, including a position-strength question.
+
+**Calibration by type**
+
+| Type | Adjustment |
 |---|---|
-| 科普与学科导论 | B 类加 1 到 2 道模型理解题（给出现象，选哪个模型能解释）；A 层测前置学科知识（如所需数学、统计基础） |
-| 实用、方法类 | B 类选项改为：已在用 / 知道但没用 / 新的 / 认为无效；C 类改为“适用条件题”：给一个情境，问该方法是否适用及原因 |
-| 学术专著 | A 层测该领域的主要学派与方法；C 类加一道“本书在学术争论中站哪一边”的选择题 |
-| 历史 | C 类加一道“解释框架辨认”：给同一事件的三四种解释，问哪种是作者的，哪种用户认同 |
-| 传记、回忆录 | 立场强度题针对传主或作者的自我叙述：可信 / 部分美化 / 严重建构 / 没想过 |
-| 散文、随笔 | B 类改为逐篇的主题兴趣与熟悉度选择；不做思维探针，改测对文体与语言的偏好 |
-| 访谈、演讲集 | B 类测受访者的代表性观点；C 类只用立场强度题 |
-| 哲学 | A 层必测关键术语；C 类以缺环题为主 |
-| 严肃文学 | 不做论断探针；读后模式测叙事技巧的辨认（给一段文字，问叙述视角或时间处理的效果）；读前模式只测背景与阅读难点承受度 |
-| 类型小说、网文 | 只问读过与否、偏好的主线（情节、感情线、设定），不做思维探针 |
-| 诗歌、戏剧 | A 层测典故与格律背景；译作加问是否需要原文对照 |
+| Popular science, introductions | B adds 1–2 model questions (given a phenomenon, which model explains it); topic layer tests prerequisites such as the math or statistics required |
+| Practical, method | B options become: already use it / know it but don't use it / new / think it doesn't work; C becomes applicability questions: given a situation, does the method apply and why |
+| Academic monograph | Topic layer tests the field's main schools and methods; C adds "which side of the scholarly debate does this book take" |
+| History | C adds framework recognition: three or four explanations of one event; which is the author's, which does the reader accept |
+| Biography, memoir | Position strength targets the subject's or author's self-narrative: credible / partly flattering / heavily constructed / never thought about it |
+| Essays | B becomes per-piece interest and familiarity; no thinking probes, test preferences for form and language instead |
+| Interviews, speeches | B tests the speaker's signature views; C uses position strength only |
+| Philosophy | Topic layer must test key terms; C mainly missing-link questions |
+| Literary fiction | No claim probes; post-reading mode tests recognition of narrative technique (given a passage, what is the effect of its point of view or handling of time); pre-reading mode tests only background and tolerance for difficulty |
+| Genre fiction, web serials | Only ask whether read and which line the reader cares about (plot, romance, setting); no thinking probes |
+| Poetry, drama | Topic layer tests allusion and prosody background; for translations, ask whether the original should be shown alongside |
 
-### 第 3 步：展示差距图与预算匹配，允许修正
+### Step 3: Show the gap map and budget fit, allow corrections
 
-在聊天里用一张简表给出结果：探针、用户标记、核实结果（实测、推定、降级）、差距类型、处理决定，外加一两句对思维差的判断（依据 C 类选择题的选项）。如果发现探针措辞造成了误判，明确指出并修正。公布 B′ 核实题的答案，简述降级原因。
+In chat, give a compact table: probe, reader's answer, check result (verified, assumed, downgraded), gap kind, treatment; plus one or two sentences on the thinking gaps based on the C answers. If a probe's wording caused a misreading, say so and correct it. Reveal the B′ answers and briefly explain any downgrade.
 
-同时给出预算匹配：
-- 全书总字数、注水率
-- 按类型、目的、预算算出的保留字数与保留率（算法见第 4 步）
-- 预计阅读时间（原文加批注加前后置章）
-- 如预算容不下全部思维差与“别跳”段落，明确说明，并给出选项：延长预算 / 知识差段落全部改为概括 / 只精读某几部分，其余只读骨架
+Also give the budget fit:
+- Total length, padding ratio
+- Target retained length and retention rate from type, goal, and budget (Step 4 algorithm)
+- Estimated reading time (original text, annotations, front and back matter)
+- If the budget cannot hold every thinking gap and Don't skip passage, say so and offer: extend the budget / summarize all knowledge-gap passages / read only certain parts closely and the rest as skeleton
 
-差距图是整个流程最重要的中间产物，请用户确认或修正后再进入加工。确认同样用 AskUserQuestion（确认 / 需要修正某几项 / 调整预算）。
+The gap map is the most important intermediate product. Ask the reader to confirm or correct it, again as multiple choice (confirm / correct some items / adjust budget), before processing.
 
-### 第 4 步：加工
+### Step 4: Processing
 
-**预算分配**
+**Budget allocation**
 
-1. 取类型基准保留率（第 1 步类型总表），混合型按章分别取值。
-2. 按阅读目的调整：
+1. Take the type's base retention (Step 1 table); for mixed books, per chapter.
+2. Adjust by goal:
 
-| 目的 | 保留率系数 | 侧重 |
+| Goal | Retention factor | Emphasis |
 |---|---|---|
-| 系统掌握 | ×1.5 到 2 | 知识差段落多保留；加术语表；每部分末尾加 2 到 3 道自测选择题 |
-| 抓住核心思想 | ×0.7 | 骨架与思维差为主，例证几乎全删 |
-| 学作者怎么想 | ×1 | 推理链保留完整原文，不拆碎；预测题增至每部分 1 题 |
-| 批判性阅读 | ×1.3 | 作者论据保留完整，不替作者概括；“局限与反驳”加重；“别跳”增至 3 处 |
-| 了解大意 | ×0.5 | 以略读概括为主，只保留最核心的一到两处思维差原文 |
+| Master systematically | ×1.5–2 | Keep more knowledge-gap passages; add a glossary; 2–3 self-test questions at the end of each part |
+| Grasp core ideas | ×0.7 | Skeleton and thinking gaps; almost all examples cut |
+| Learn how the author thinks | ×1 | Keep reasoning chains as complete original text, never fragmented; one prediction prompt per part |
+| Read critically | ×1.3 | Keep the author's evidence whole, never summarize on the author's behalf; heavier Limits and Counterarguments; 3 Don't skip passages |
+| Get the gist | ×0.5 | Mostly skims; keep only the one or two most central thinking-gap passages in original |
 
-3. 用时间预算封顶：可用原文字数 ≈ 预算分钟 × 有效速度 × 0.7（其余 30% 留给前置章、批注与略读概括）。“不限”时不封顶。
-4. 取第 2 步与第 3 步中较小者为目标保留字数。超出预算时按以下顺序削减，前一类削完才动下一类：
-   1. 已覆盖（实测）
-   2. 同一观点的重复例证、铺垫
-   3. 已覆盖（推定）改为一行
-   4. 知识差段落改为概括加背景卡
-   5. 观念差只留核心段落
-   6. 思维差与“别跳”不削减；仍超预算则回到第 3 步请用户选择
-5. 不删类型（严肃文学、诗歌戏剧、推理小说、哲学）不适用削减；预算不足时建议选读篇目或章节并给出选读理由，不删改选中部分。
+3. Cap by time budget: available original length ≈ budget minutes × effective speed × 0.7 (the other 30% is for front matter, annotations, and skims). No cap for "unlimited".
+4. Target retained length is the smaller of steps 2 and 3. If over budget, cut in this order, finishing each class before touching the next:
+   1. Covered (verified)
+   2. Repeated examples of the same point, build-up
+   3. Covered (assumed) reduced to one line
+   4. Knowledge-gap passages reduced to summary plus background card
+   5. View-gap passages reduced to their core
+   6. Thinking gaps and Don't skip passages are never cut; if still over budget, return to Step 3 and let the reader choose
+5. No-cut types (literary fiction, poetry, drama, detective fiction, philosophy) are exempt from cutting; if the budget is short, recommend a selection of pieces or chapters with reasons, and never alter the selected parts.
 
-**阅读路线规格文件**
+**Route spec file**
 
-先写规格文件，逐篇列出操作，再由脚本生成成品：
-- `R 范围`：保留原文
-- `S 范围 概括`：略读，AI 概括
-- `K 范围 原因`：删去，记下原因（自动进入删减日志）
-- `N 批注`：AI 批注
-- `F`：别跳标记
+Write a spec listing operations piece by piece before generating the output with a script:
+- `R range`: keep original
+- `S range summary`: skim, AI summary
+- `K range reason`: cut, with reason (feeds the cut log automatically)
+- `N annotation`: AI annotation
+- `F`: Don't skip marker
 
-脚本统计 R 范围字数，与目标保留字数偏差超过 15% 时调整规格后重新生成。
+The script totals the length of R ranges; if it deviates from the target by more than 15%, adjust the spec and regenerate.
 
-**删减标准（通用）**
-- 保留：知识差、观念差、思维差对应的段落；作者独特的推理步骤；可迁移的思维模式。
-- 删去：同一观点的第二、第三个例子；电影或新闻情节复述；重复论证与口号；已覆盖（实测）的背景；铺垫。
-- 强制“别跳”：保留一到三处与用户立场相左、或是作者对用户最有力反论据的段落，防止工具只确认用户已有的观念。用户在 B 类探针中没有选“不同意”时，从立场强度题和作者自相矛盾处选取。
+**Cutting standards (general)**
+- Keep: passages matching knowledge, view, and thinking gaps; the author's distinctive reasoning steps; transferable patterns of thought.
+- Cut: second and third examples of the same point; retellings of films or news; repeated arguments and slogans; verified-covered background; build-up.
+- Mandatory Don't skip: keep one to three passages that oppose the reader's position or give the author's strongest counterevidence to it, so the tool never merely confirms existing beliefs. If the reader chose no "Disagree", select from position-strength answers and the author's self-contradictions.
 
-**批注要求（通用）**
-- 指出机制，说明可迁移之处，不复述内容。
-- 核查作者引用的轶事、语录、年代。可疑之处在批注中标出，用“一般认为”“难以核实”等措辞，不编造出处。
-- 作者只讲了一半的机制，用学术上的对应补足另一半。
-- 观念差处，指出分歧的实质（例如结果论对目的论），并找出作者自身在同一问题上的不一致。
+**Annotation standards (general)**
+- Point out mechanisms and what transfers; do not restate content.
+- Check anecdotes, quotations, and dates the author cites. Flag doubtful ones with wording such as "commonly attributed" or "hard to verify"; never invent sources.
+- Where the author explains only half a mechanism, complete it with the corresponding scholarship.
+- At view gaps, name the substance of the disagreement (e.g., consequentialism versus teleology) and find the author's own inconsistency on the same question.
 
-**按类型的附加处理**
+**Additional processing by type**
 
-- **科普与学科导论**
-  - 概念依赖图：列出核心概念及其前置概念，放在前置章。
-  - 删科学家轶事与发现过程的戏剧化叙述，保留关键实验的设计逻辑。
-  - 过时检查：出版年份之后已被推翻、修正或未能重复的结论，在批注中标出，并说明现在的主流看法（需检索核实，不凭记忆断言）。
-- **实用、方法、商业、自我提升**
-  - 每个方法做一张方法卡：步骤、适用条件、证据强度（有研究支持 / 案例支持 / 仅作者经验）、失效场景。
-  - 标出幸存者偏差与无证据的断言。
-  - 案例故事只保留最能说明适用条件的一个。
-- **学术专著、教科书**
-  - 学术定位卡：本书回应的争论、对立学派、后续影响。
-  - 文献综述章按用户 A 层结果删减，方法章不删。
-  - 教科书的习题与例题保留有代表性的，标注对应的核心概念。
-- **历史**
-  - 区分史实层与解释层，批注中明确标出哪句是作者的解释。
-  - 时间线卡放在前置章，正文可删编年细节。
-  - 标出作者所属的史学取向与同一事件的其他主要解释。
-- **传记、回忆录**
-  - 关键决策表：时间、决策、作者给出的理由、可能的其他理由。
-  - 标出自我美化、事后合理化与叙述空白（明显略过的时期）。
-  - 作者层章节加重。
-- **散文、随笔、文集**
-  - 按篇筛选，整篇保留或整篇删去，不删句，保护语言完整。
-  - 保留篇目附一句“为何值得读”，删去篇目在删减日志中写明主题。
-- **访谈、演讲集**：删寒暄、重复提问与重复回答；同一观点在多篇中出现时只保留表述最完整的一处，其余标注交叉引用。
-- **哲学**
-  - 体系型：术语表（注明译本译法与原文）、论证步骤图、每个难点的一句话版本。
-  - 格言、断片、对话型：不做步骤图，改为主题索引（按主题归集散落的条目编号），并标出条目之间的张力与自相矛盾处。
-- **推理小说**：结构与诡计拆解只在读后模式出现。
-- **科幻、奇幻**
-  - 读前模式：只给跳读标记，不剧透，不做分析。
-  - 读后模式：
-    - 设定推演表：核心设定；作者推出的一阶、二阶后果；作者没有推下去的方向（明确标注为 AI 推演）。
-    - 套皮检测：把设定换成现实背景，故事是否基本不变。若不变，指出设定只是外皮。
-    - 形式保护：形式本身承载意义的段落（如文体随人物状态变化）标为不可删减。
-- **严肃文学**
-  - 读前模式：只给背景卡与阅读难点提示（如时间跳转方式、叙述者是否可靠的提醒，不透露结论）。
-  - 读后模式：叙述视角与时间结构分析、意象系统表（意象、出现位置、含义变化）、形式与主题的关系。
-  - 不删减；预算不足时按预算分配第 5 条建议选读。
-- **类型小说、长篇网文**
-  - 主线图：主线与支线，标出每章所属。
-  - 跳读标记：水章、重复打斗或日常、与主线无关的支线。
-  - 保留人物转变与主线转折的完整场景。
-- **诗歌、戏剧**
-  - 诗歌：典故与意象注释；译作附原文对照（如用户需要）；格律或形式特征说明。
-  - 戏剧：人物关系图、冲突结构（每幕的冲突推进）、关键台词批注。
+- **Popular science, introductions**
+  - Concept dependency map of core concepts and prerequisites, in front matter.
+  - Cut scientist anecdotes and dramatized discovery stories; keep the design logic of key experiments.
+  - Outdated check: conclusions overturned, revised, or failed to replicate since publication are flagged with the current mainstream view (verify by search if available; never assert from memory).
+- **Practical, method, business, self-help**
+  - A method card per method: steps, conditions, evidence strength (research / case / author experience only), failure scenarios.
+  - Flag survivorship bias and unsupported assertions.
+  - Keep only the one case story that best shows the conditions.
+- **Academic monographs, textbooks**
+  - Scholarly position card: the debate the book answers, opposing schools, later influence.
+  - Cut literature-review chapters according to the topic layer; never cut method chapters.
+  - Keep representative exercises and worked examples, tagged with their core concept.
+- **History**
+  - Separate fact from interpretation; annotations say explicitly which sentence is the author's interpretation.
+  - Timeline card in front matter; chronicle detail can be cut from the body.
+  - Name the author's historiographical approach and other major explanations of the same events.
+- **Biography, memoir**
+  - Key decision table: time, decision, reason given, possible other reasons.
+  - Flag self-flattery, post hoc rationalization, and narrative gaps (periods conspicuously skipped).
+  - Author-level chapter weighted more heavily.
+- **Essays, collections**
+  - Select by piece: keep or cut whole pieces, never sentences, to protect language.
+  - Each kept piece gets one line on why it is worth reading; each cut piece's theme goes in the cut log.
+- **Interviews, speeches**: cut pleasantries, repeated questions, and repeated answers; where one view recurs across pieces, keep the fullest statement and cross-reference the rest.
+- **Philosophy**
+  - Systematic: glossary (with the translation's rendering and the original term), argument step map, one-sentence version of each difficult point.
+  - Aphorisms, fragments, dialogues: no step map; a thematic index (entries grouped by theme) marking tensions and contradictions between entries.
+- **Detective fiction**: structure and puzzle breakdown only in post-reading mode.
+- **Science fiction, fantasy**
+  - Pre-reading: skip markers only, no spoilers, no analysis.
+  - Post-reading:
+    - Setting consequence table: core setting; first- and second-order consequences the author draws; directions the author left unexplored (clearly marked as AI extrapolation).
+    - Reskin test: replace the setting with a realistic background; if the story barely changes, point out the setting is only a skin.
+    - Form protection: passages where form carries meaning (e.g., style changing with a character's state) are uncuttable.
+- **Literary fiction**
+  - Pre-reading: background card and difficulty hints only (how time jumps work, a caution about narrator reliability, without conclusions).
+  - Post-reading: point of view and time structure analysis, image system table (image, locations, shifts in meaning), relation of form to theme.
+  - No cuts; if the budget is short, recommend a selection as in budget rule 5.
+- **Genre fiction, web serials**
+  - Main-line map: main and side plots, with each chapter's line.
+  - Skip markers: filler chapters, repetitive fights or daily life, side plots unrelated to the main line.
+  - Keep complete scenes of character change and main-line turns.
+- **Poetry, drama**
+  - Poetry: allusion and image notes; original alongside translations if requested; notes on prosody or form.
+  - Drama: character relationship map, conflict structure (conflict progression per act), notes on key lines.
 
-### 第 5 步：输出
+### Step 5: Output
 
-**阅读器在第 0 批或最后一批中问。默认输出精简版 EPUB**：日常阅读在阅读器里完成，HTML 需要在页面与原书之间来回切换，摩擦大。只有用户明确要在电脑上精读或查阅时，才输出 HTML（批注用 `<details>` 折叠，支持深浅色，手机宽度可读，不用浏览器存储）。
+**Ask for the target reader app in batch 0 or the last batch. Default output is a trimmed EPUB**: everyday reading happens in a reader app, and switching between an HTML page and the book adds friction. Output HTML only if the reader explicitly wants close study on a computer (annotations collapsed in `<details>`, light and dark themes, readable at phone width, no browser storage).
 
-**EPUB 结构**
-- 前置章：
-  - 使用说明（标记图例、建议读法、预计阅读时间）
-  - 概览与差距图（书名、类型、阅读目的、时间预算、注水率、保留率、差距表、核实结果、思维差判断）
-  - 背景卡（每个主题层“陌生”项一张）
-  - 类型附加卡（概念依赖图、时间线、学术定位、方法卡索引、主线图、人物关系图等，按类型取用）
-  - 一页骨架
-  - “你大概会想跳过，但不该跳过”清单
-- 正文：按原书顺序每篇一章。
-  - 原文段落前加小号编号 `[章.段]`
-  - 略读段以“〔略读〕”开头
-  - 删去处留一行“〔删去 N 段：原因〕”
-  - 批注以“〔批注〕”开头
-  - 预测题以“〔先想〕”开头
-  - 别跳以“〔别跳〕”开头
-  - 目的为“系统掌握”时，每部分末尾加“〔自测〕”选择题，答案放在下一部分开头
-  - 整篇删去的文章也保留一章，只含一行删去说明
-- 后置章：作者层、现实映射、局限与反驳、思想线索标签、删减日志（由规格文件自动生成）。方法类书籍另附全部方法卡。
+**EPUB structure**
+- Front matter:
+  - How to use (marker legend, suggested reading order, estimated time)
+  - Overview and gap map (title, type, goal, budget, padding ratio, retention, gap table, check results, thinking-gap judgment)
+  - Background cards (one per "unfamiliar" topic item)
+  - Type cards (concept map, timeline, scholarly position, method card index, main-line map, character map, as the type requires)
+  - One-page skeleton
+  - "You will want to skip these, but shouldn't" list
+- Body: in the book's original order, one chapter per piece.
+  - Small locator `[chapter.paragraph]` before each original paragraph
+  - Skim, Cut, Note, Predict, and Don't skip markers as in the marker table
+  - For "master systematically", Self-test questions at the end of each part, answers at the start of the next
+  - A piece cut entirely still gets a chapter containing only its cut line
+- Back matter: author level, present-day mapping, limits and counterarguments, idea thread tags, cut log (generated from the spec). Method books also get all method cards.
 
-**阅读器适配**
-- 微信读书等对脚注弹窗和 CSS 支持有限的阅读器：批注做成段后缩进小字，并用文字前缀区分，保证 CSS 失效时仍可辨认。
-- Apple Books 等支持 EPUB3 脚注弹窗的阅读器：批注可做成 `epub:type="noteref"` 弹出脚注。
+**Reader app compatibility**
+- Apps with limited popup-footnote and CSS support (e.g., WeChat Read, some Kindle conversions): annotations become indented small text after the paragraph, distinguished by the text marker so they remain recognizable if CSS fails.
+- Apps supporting EPUB3 popup footnotes (e.g., Apple Books): annotations may use `epub:type="noteref"` footnotes.
 
-**技术要求**：用 zipfile 手工打包，mimetype 放在第一个且不压缩；同时提供 nav.xhtml 与 toc.ncx；表格用简单 `<table>`。打包后用 XML 解析器检查每个 xhtml 是否良构，统计保留原文占比并与目标保留率对照，抽查一章的渲染文本。
+**Technical requirements**: package with Python `zipfile`; `mimetype` first and uncompressed; include both `nav.xhtml` and `toc.ncx`; simple `<table>` for tables. After packaging, parse every xhtml with an XML parser to confirm it is well formed, compute the share of retained original text against the target, and spot-check one chapter's rendered text.
 
-**交付**：写到 `/mnt/user-data/outputs/<书名>-差距阅读版.epub`，用 SendUserFile 发送。**不发布为 Artifact**：成品含原书文字，只作为用户的个人文件。
+**Delivery**: save as `<book title>-bespoke.epub` (Chinese readers: `<书名>-量体裁书版.epub`) in the output location described in Host conventions and send it to the reader. **Never publish it online** (no public links, hosted pages, or repositories): the output contains the book's text and is a personal file only.
 
-## 各章写法
+## How to write the back-matter chapters
 
-- **作者层**：不讲书里说了什么，讲这些想法从哪里来。分析出身与经历如何被提升为原则、写作处境如何塑造语气、全书真正的价值轴线、自我形象与自相矛盾、少见的自我怀疑。每条后附“可推广的特征”，提炼可用于其他作者的规律。
-- **现实映射**：用当下真实、可查证的现象检验书中机制，不虚构案例。
-- **局限与反驳**：逐条对应核心论断，包括概念混淆、只讲一半的机制、幸存者偏差、证据质量、可检验的时代判断。
-- **思想线索标签**：表格形式，列出标签、本书位置、可连接的方向。
+- **Author level**: not what the book says, but where these ideas come from. Analyze how background and experience were promoted into principles, how the writing situation shaped the tone, the book's real axis of values, its self-image and contradictions, its rare self-doubt. Each point ends with a "generalizable trait" that applies to other authors.
+- **Present-day mapping**: test the book's mechanisms against real, verifiable present-day phenomena; never invent cases.
+- **Limits and counterarguments**: one per core claim, covering conceptual confusion, half-explained mechanisms, survivorship bias, evidence quality, and testable period judgments.
+- **Idea thread tags**: a table of tag, location in the book, directions it connects to.
 
-## 批注文风
+## Annotation style
 
-分析性、克制、完整句。站在内容之上分析作者为何这样想，不逐条复述内容。不使用破折号，不用口语填充和玩笑。每条批注尽量写出核心判断，不展开所有支撑细节。
+Analytical, restrained, complete sentences. Stand above the content and analyze why the author thinks this way rather than restating content point by point. No dashes, no conversational filler, no jokes. Each annotation states its core judgment without walking through every supporting detail.
 
-## 反馈回路
+## Feedback loop
 
-用户读完后，如愿意，用一次 AskUserQuestion 收集：哪类批注有用、在哪里停下、预测题是否猜中、哪个探针问得不准、实际用时与预计是否相符（偏快 / 相符 / 偏慢）、删减是否过多或过少。据此修正差距判断与默认阅读速度，并改进下一本书的探针设计、类型规则与本技能。
+After the reader finishes, if willing, collect with one multiple-choice batch: which kinds of annotation helped, where they stopped, whether predictions were right, which probe was inaccurate, actual time versus estimate (faster / as expected / slower), whether cuts were too heavy or too light. Use this to correct the gap judgment and default speed, and to improve probe design, type rules, and this skill for the next book.
 
-## 不做的事
+## Never
 
-- 不给用户打等级或评价其整体认知水平。
-- 不在未校准、未确认差距图的情况下开始删减。
-- 不在校准流程中插入开放式主观题。
-- 不把未核实的“早就知道”直接删去，只做概括。
-- 不为满足时间预算而削减思维差与“别跳”段落，预算冲突交给用户决定。
-- 不删改严肃文学、诗歌、戏剧、推理小说与哲学原文，预算不足时只建议选读。
-- 不把 AI 推演混入作者观点。
-- 不在读前模式下剧透。
-- 不把含原书文字的成品发布到网上。
+- Grade the reader or evaluate their overall intellectual level.
+- Start cutting before calibration and a confirmed gap map.
+- Insert open-ended questions into calibration.
+- Cut an unverified "knew it"; only summarize it.
+- Cut thinking gaps or Don't skip passages to fit the budget; budget conflicts go to the reader.
+- Cut or alter literary fiction, poetry, drama, detective fiction, or philosophy; only recommend selections when the budget is short.
+- Mix AI extrapolation into the author's views.
+- Spoil anything in pre-reading mode.
+- Publish an output containing the book's text online.
