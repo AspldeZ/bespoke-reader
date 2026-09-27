@@ -1,9 +1,11 @@
 ---
 name: bespoke-reader
-description: "Bespoke Reader 量体裁书: tailors a whole book (EPUB, PDF, TXT) to one reader. Measures the gap between reader and book with multiple-choice questions drawn from the book itself, trims the original text by reading goal and time budget, annotates what the reader cannot yet cross alone, and outputs a personal EPUB. Triggers: \"tailor this book\", \"bespoke reading\", \"gap reading\", \"cut this book to my level\"; 「量体裁书」「差距阅读」「帮我拆这本书」「按我的水平处理这本书」."
+description: "Bespoke Reader 量体裁书: tailors a whole book (EPUB, PDF, TXT) to one reader. Measures the gap between reader and book with multiple-choice questions drawn from the book itself, trims the original text by reading goal and time budget, annotates what the reader cannot yet cross alone, adds chapter guides, character tables and plot hints for hard fiction, and outputs a personal EPUB that keeps the original cover and styling. Triggers: \"tailor this book\", \"bespoke reading\", \"gap reading\", \"cut this book to my level\"; 「量体裁书」「差距阅读」「帮我拆这本书」「按我的水平处理这本书」."
 ---
 
-# Bespoke Reader v0.5
+# Bespoke Reader v2.0
+
+Aim: the smoothest, most comfortable reading of this book this reader can have. Time goes to the book itself, not to re-reading passages that are already familiar, looking up background halfway through a page, or losing track of who is who and when.
 
 Core principle: do not locate the reader's absolute level. Measure only **the gap between this reader and this book**. The gap decides what is cut, kept, and annotated; the **reading goal** decides emphasis; the **time budget** caps the total.
 
@@ -12,7 +14,9 @@ Core principle: do not locate the reader's absolute level. Measure only **the ga
 This skill runs on any agent that can read files, run Python, and write files (Claude apps, Claude Code, Codex, and similar).
 
 - **Questions**: every calibration and confirmation step is multiple choice. If the host offers a structured question tool, use it, at most 4 questions per batch. Otherwise, post the batch in chat as numbered questions with lettered options and wait for the answers before continuing.
-- **Working files**: keep intermediate files in `bespoke-work/<book-slug>/` under the current working directory (or the host's scratch directory).
+- **Working files**: keep intermediate files in `bespoke-work/<book-slug>/` under the current working directory (or the host's scratch directory). Scripts live in `<skill-dir>/scripts/`.
+- **State file**: keep `bespoke-work/<book-slug>/state.md` up to date: every decision the reader made (goal, budget, speed, mode, hint depth, extras, reader app), the gap map, the per-chapter budget, and which chapters have specs. Hosts lose sessions and hit usage limits; with the state file, the specs and the original book, any new session resumes where the last one stopped.
+- **Backups**: after each part of the book, send the reader a zip of `state.md`, `spec/` and `front/`. These contain no book text, so they are safe to keep anywhere, and they are enough to rebuild or revise the EPUB later.
 - **Output**: write the final file to the host's designated output directory if one exists, otherwise to `./output/`, then deliver it through whatever mechanism the host provides for sending files to the user.
 - **Language**: talk to the reader, write questions, annotations, cards, and markers in **the reader's language** (the language of their messages, unless they ask otherwise). Original text always stays in the book's own language and is never translated in place.
 
@@ -26,6 +30,10 @@ This skill runs on any agent that can read files, run Python, and write files (C
 | Prediction prompt | `[Predict]` | `〔先想〕` |
 | Must-read passage | `[Don't skip]` | `〔别跳〕` |
 | Self-test | `[Self-test]` | `〔自测〕` |
+| Chapter guide | `[Guide]` | `〔导读〕` |
+| Plot or reading hint | `[Hint]` | `〔提示〕` |
+
+**Locators**: show a paragraph locator only where something was done: a paragraph with a note, hint, prediction or Don't skip flag, and every Skim or Cut line (with the range it replaces). Paragraphs kept untouched carry no locator; a number before every paragraph spoils the reading.
 
 ## Kinds of gap
 
@@ -43,15 +51,13 @@ Thinking gaps are the most valuable and the hardest to measure; calibration must
 
 ### Step 0: Extract the whole book
 
-Run `scripts/extract_epub.py` (bundled with this skill):
-
 ```bash
-python3 <skill-dir>/scripts/extract_epub.py book.epub bespoke-work/<book-slug>/text
+python3 <skill-dir>/scripts/extract_epub.py book.epub bespoke-work/<book-slug>
 ```
 
-It splits the EPUB into per-chapter text files where every paragraph carries a locator `[chapter.paragraph]`, and writes `index.tsv`. Chapter numbers follow the EPUB spine and may differ from the printed numbering, so when citing a location also give the opening words of the paragraph. One spine file may contain several pieces; detect titles by short lines. For PDF or TXT, extract with available tools into the same format.
+It unpacks the EPUB into `orig/` (the cover, stylesheets and images are reused at build time), writes one `text/chNNN.txt` per spine item with every paragraph prefixed `[N.i]`, lists footnotes separately at the end of each file, and writes `paras.json`, `meta.json` and `index.tsv`. Chapter numbers follow the spine and never skip, so text files, spec files and the build always agree. Front matter such as copyright pages and tables of contents shows up as small files; ignore them. When citing a location to the reader, give the chapter title and the opening words, not only the number. For PDF or TXT, produce the same files with available tools.
 
-Chapter files are often too large to read at once. Read them in chunks of about 27 KB, cut at line boundaries, and read the **entire** book, not only the beginning.
+Chapter files are often too large to read at once. Read them in chunks of about 27 KB, cut at line boundaries, and read the **entire** book, not only the beginning. Read the author's notes, afterword and appendices too: they are raw material for annotations.
 
 ### Step 1: First pass, structure and type
 
@@ -72,14 +78,16 @@ Write `notes/overview.md`: type and value unit, estimated padding ratio, total l
 | Philosophy | Systematic treatise | Argument steps | Annotate, almost no cuts | 80%+ |
 | Philosophy | Aphorisms, fragments, dialogues | Core propositions and thematic links | Annotate, build a thematic index | 80%+ |
 | Fiction | Detective fiction | Puzzle and structure | Post-reading breakdown, never reorder | No cuts |
-| Fiction | Science fiction, fantasy (setting-driven) | Setting and its consequences, key scenes | Pre- or post-reading mode | Pre-reading: skip markers only |
-| Fiction | Literary fiction | Form, point of view, image systems | Post-reading close annotation, no cuts | No cuts |
+| Fiction | Science fiction, fantasy (setting-driven, idea-driven) | Setting and its consequences, key scenes, the ideas the plot carries | Pre-reading (full or trimmed) or post-reading | Full: no cuts; trimmed: 35–50%, set by budget |
+| Fiction | Literary fiction, including dense classics (Dostoevsky, Latin American novels, multi-generation sagas) | Form, point of view, image systems, who is who | Reader aids plus post-reading close annotation | No cuts by default |
 | Fiction | Genre fiction, long web serials | Main plot, character change | Skip markers | Keep 20–40% along the main line |
 | Poetry, drama | Poetry collections, plays | Images, allusions, conflict structure | Annotate, no cuts | No cuts |
 
 **Mixed books**: chapters may belong to different types (narrative and argument alternating, method inside memoir). Decide the main type, tag each chapter with its own type, and apply per-chapter rules in Step 4.
 
-For fiction, first ask whether the reader has already read it (this selects pre- or post-reading mode).
+For fiction, first ask whether the reader has already read it (this selects pre- or post-reading mode), and what makes the book hard for them: names and relationships, jumping timelines, background knowledge, the ideas, or plain length. The answer decides which reader aids to build (Step 4, fiction).
+
+**Extras**: list what the edition carries besides the main text (author's notes and references, translator's notes, afterword, appendices, bonus stories) and ask in batch 0 how to treat each: fold into annotations, keep as optional back matter outside the budget, or leave out.
 
 ### Step 2: Calibration (the critical step)
 
@@ -102,6 +110,7 @@ Whole calibration, batch 0 included: at most 20 questions in 6 batches. Question
 1. Reading goal (single choice): master it systematically (course, thesis, work) / grasp the core ideas / learn how the author thinks / read critically, to review or rebut / get the gist, enough to discuss it
 2. Time budget: under 2 hours / 2–5 hours / 5–10 hours / unlimited
 3. Reading language and speed: native, fast / native, normal / non-native, fluent / non-native, needs a dictionary
+4. For fiction: how much the hints may reveal (only what has happened so far, recommended / may foreshadow / full post-reading analysis) and in what form (chapter guides plus hints in the text, recommended / chapter guides only / in-text hints only)
 
 Default effective speeds for original text, including time spent on annotations:
 
@@ -173,6 +182,7 @@ Adjust each batch based on the previous one:
 | Interviews, speeches | B tests the speaker's signature views; C uses position strength only |
 | Philosophy | Topic layer must test key terms; C mainly missing-link questions |
 | Literary fiction | No claim probes; post-reading mode tests recognition of narrative technique (given a passage, what is the effect of its point of view or handling of time); pre-reading mode tests only background and tolerance for difficulty |
+| Idea-driven science fiction | Topic layer is the main instrument: one question per field the plot leans on (for *Blindsight*: philosophy of mind, neuroscience). "Only heard the term" or "unfamiliar" gets a background card and denser annotations at first use; no claim probes that would reveal plot |
 | Genre fiction, web serials | Only ask whether read and which line the reader cares about (plot, romance, setting); no thinking probes |
 | Poetry, drama | Topic layer tests allusion and prosody background; for translations, ask whether the original should be shown alongside |
 
@@ -183,7 +193,7 @@ In chat, give a compact table: probe, reader's answer, check result (verified, a
 Also give the budget fit:
 - Total length, padding ratio
 - Target retained length and retention rate from type, goal, and budget (Step 4 algorithm)
-- Estimated reading time (original text, annotations, front and back matter)
+- Estimated reading time counted on the **whole reading load**: kept original text, summaries, guides, annotations, and front and back matter. In practice the added text is 25–35% of the total, so the old rule of thumb that annotations take 30% of the time is optimistic for heavily annotated books
 - If the budget cannot hold every thinking gap and Don't skip passage, say so and offer: extend the budget / summarize all knowledge-gap passages / read only certain parts closely and the rest as skeleton
 
 The gap map is the most important intermediate product. Ask the reader to confirm or correct it, again as multiple choice (confirm / correct some items / adjust budget), before processing.
@@ -212,19 +222,35 @@ The gap map is the most important intermediate product. Ask the reader to confir
    5. View-gap passages reduced to their core
    6. Thinking gaps and Don't skip passages are never cut; if still over budget, return to Step 3 and let the reader choose
 5. No-cut types (literary fiction, poetry, drama, detective fiction, philosophy) are exempt from cutting; if the budget is short, recommend a selection of pieces or chapters with reasons, and never alter the selected parts.
+6. **Allocate before writing specs.** Give every chapter a target in characters (or words) from its role: chapters that carry the book's central ideas or turning points get more, transitional action, travel and repeated set pieces get less. Record the table in `state.md`. Allocating after the fact does not work: the first draft of a spec always keeps too much, and trimming a finished book costs a second pass over every chapter.
+7. **Check while writing.** After each chapter's spec, run the checker with the target; it prints the cumulative retention and flags overshoot:
+
+```bash
+python3 <skill-dir>/scripts/check_spec.py bespoke-work/<book-slug> --speed 300 --budget 360 --target 0.4
+```
+
+If the reader later relaxes the budget ("keep it if cutting would lose something important"), stop trimming the core passages and say what the final time is.
 
 **Route spec file**
 
-Write a spec listing operations piece by piece before generating the output with a script:
-- `R range`: keep original
-- `S range summary`: skim, AI summary
-- `K range reason`: cut, with reason (feeds the cut log automatically)
-- `N annotation`: AI annotation
-- `F`: Don't skip marker
+One file per chapter, `spec/chNNN.txt`, numbered like `text/chNNN.txt`. Paragraph numbers are the `i` in `[N.i]`:
 
-The script totals the length of R ranges; if it deviates from the target by more than 15%, adjust the spec and regenerate.
+```
+T 罗夏 · 4                      chapter title for the table of contents
+G 本章……                        chapter guide (fiction: previously, who is where, what to watch for)
+R 1-2                           keep original paragraphs 1..2
+S 3-14 船员们五次下到罗夏……       skim: summary replacing 3..14
+K 15-18 second example of the same point   cut, with the reason
+N 16 这就是盲视背后的神经学……      annotation after paragraph 16
+H 22 说话的是萨沙……               plot or reading hint after paragraph 22
+P 30 他会怎么做？                 prediction question before paragraph 30
+F 16                            Don't skip flag before paragraph 16
+```
+
+Every paragraph with text is covered by exactly one R, S or K range. N and H may point inside an S or K range; they then appear after that summary, so write them to make sense next to the summary. `check_spec.py` reports gaps, overlaps, misplaced flags and the budget. A filled example is in the repository under `examples/blindsight/`.
 
 **Cutting standards (general)**
+- In narrative books, prefer Skim over Cut: a skim that says what happened keeps the plot continuous, a cut line leaves a hole. Use Cut for material with no plot content (description, repeated set pieces, filler).
 - Keep: passages matching knowledge, view, and thinking gaps; the author's distinctive reasoning steps; transferable patterns of thought.
 - Cut: second and third examples of the same point; retellings of films or news; repeated arguments and slogans; verified-covered background; build-up.
 - Mandatory Don't skip: keep one to three passages that oppose the reader's position or give the author's strongest counterevidence to it, so the tool never merely confirms existing beliefs. If the reader chose no "Disagree", select from position-strength answers and the author's self-contradictions.
@@ -234,6 +260,9 @@ The script totals the length of R ranges; if it deviates from the target by more
 - Check anecdotes, quotations, and dates the author cites. Flag doubtful ones with wording such as "commonly attributed" or "hard to verify"; never invent sources.
 - Where the author explains only half a mechanism, complete it with the corresponding scholarship.
 - At view gaps, name the substance of the disagreement (e.g., consequentialism versus teleology) and find the author's own inconsistency on the same question.
+- Fold the author's own notes into annotations at the passages they explain, and say that the point comes from the author. In pre-reading mode use only what the text has revealed so far: authors' notes often discuss the ending.
+- No leading annotations. A note that says "remember this judgment" about a claim the book will later overturn is a spoiler by hint. Explain what the reader needs now and stop.
+- Keep annotations short. Most should be one to three sentences; the added text counts against the reading budget.
 
 **Additional processing by type**
 
@@ -266,15 +295,21 @@ The script totals the length of R ranges; if it deviates from the target by more
   - Aphorisms, fragments, dialogues: no step map; a thematic index (entries grouped by theme) marking tensions and contradictions between entries.
 - **Detective fiction**: structure and puzzle breakdown only in post-reading mode.
 - **Science fiction, fantasy**
-  - Pre-reading: skip markers only, no spoilers, no analysis.
+  - Pre-reading, full: no cuts; chapter guides, hints and annotations only, no spoilers.
+  - Pre-reading, trimmed (when the reader sets a budget): the book is cut, but every removed stretch of plot becomes a Skim that says what happened, so the story never breaks. Idea passages, turning points and form-carrying passages are kept whole. Front matter: how-to-use page with the marker table and the estimated time, one background card per unfamiliar field, a character and term table limited to what the opening chapters reveal. Back matter: an "after reading" page with the ending discussion, marked at the top as containing the ending.
   - Post-reading:
     - Setting consequence table: core setting; first- and second-order consequences the author draws; directions the author left unexplored (clearly marked as AI extrapolation).
     - Reskin test: replace the setting with a realistic background; if the story barely changes, point out the setting is only a skin.
-    - Form protection: passages where form carries meaning (e.g., style changing with a character's state) are uncuttable.
-- **Literary fiction**
-  - Pre-reading: background card and difficulty hints only (how time jumps work, a caution about narrator reliability, without conclusions).
+  - Form protection in every mode: passages where form carries meaning (e.g., style changing with a character's state) are uncuttable.
+- **Literary fiction, dense classics**
+  - Reader aids, all spoiler-free in pre-reading mode:
+    - Character table with every name form the book uses. Russian novels call one person by full name, name and patronymic, surname and several diminutives; Latin American family sagas reuse the same names across generations. List each person once with all forms, their role and relations, as far as the reader has read.
+    - Relationship map and family tree, kept to what has been revealed.
+    - Chapter guide: previously, who is where, what to watch for.
+    - In-text hints where the narration jumps in time, switches narrator or refers to someone by a new name.
+  - Pre-reading background card and difficulty hints (how time jumps work, a caution about narrator reliability, without conclusions).
   - Post-reading: point of view and time structure analysis, image system table (image, locations, shifts in meaning), relation of form to theme.
-  - No cuts; if the budget is short, recommend a selection as in budget rule 5.
+  - No cuts by default; if the budget is short, recommend a selection as in budget rule 5. If the reader explicitly asks for a trimmed version, use the trimmed mode above and tell them what kind of passage is lost.
 - **Genre fiction, web serials**
   - Main-line map: main and side plots, with each chapter's line.
   - Skip markers: filler chapters, repetitive fights or daily life, side plots unrelated to the main line.
@@ -287,7 +322,9 @@ The script totals the length of R ranges; if it deviates from the target by more
 
 **Ask for the target reader app in batch 0 or the last batch. Default output is a trimmed EPUB**: everyday reading happens in a reader app, and switching between an HTML page and the book adds friction. Output HTML only if the reader explicitly wants close study on a computer (annotations collapsed in `<details>`, light and dark themes, readable at phone width, no browser storage).
 
-**EPUB structure**
+**Preview**: after the first part of the book (or about a fifth of it), build and send a preview EPUB. Readers find format problems (locators, marker style, guide length) faster in their own reader app than in a description, and fixing them early saves rework.
+
+**EPUB structure** (nonfiction; for fiction use the front and back matter listed under Step 4, fiction)
 - Front matter:
   - How to use (marker legend, suggested reading order, estimated time)
   - Overview and gap map (title, type, goal, budget, padding ratio, retention, gap table, check results, thinking-gap judgment)
@@ -296,7 +333,7 @@ The script totals the length of R ranges; if it deviates from the target by more
   - One-page skeleton
   - "You will want to skip these, but shouldn't" list
 - Body: in the book's original order, one chapter per piece.
-  - Small locator `[chapter.paragraph]` before each original paragraph
+  - Locators only where something was done (see Locators)
   - Skim, Cut, Note, Predict, and Don't skip markers as in the marker table
   - For "master systematically", Self-test questions at the end of each part, answers at the start of the next
   - A piece cut entirely still gets a chapter containing only its cut line
@@ -306,9 +343,17 @@ The script totals the length of R ranges; if it deviates from the target by more
 - Apps with limited popup-footnote and CSS support (e.g., WeChat Read, some Kindle conversions): annotations become indented small text after the paragraph, distinguished by the text marker so they remain recognizable if CSS fails.
 - Apps supporting EPUB3 popup footnotes (e.g., Apple Books): annotations may use `epub:type="noteref"` footnotes.
 
-**Technical requirements**: package with Python `zipfile`; `mimetype` first and uncompressed; include both `nav.xhtml` and `toc.ncx`; simple `<table>` for tables. After packaging, parse every xhtml with an XML parser to confirm it is well formed, compute the share of retained original text against the target, and spot-check one chapter's rendered text.
+**Build**: write front and back matter pages as plain files in `front/` (`# ` title, `## ` heading, `|`-separated table rows, one paragraph per line; names sorted, files starting with `zz` go after the last chapter), then:
 
-**Delivery**: save as `<book title>-bespoke.epub` (Chinese readers: `<书名>-量体裁书版.epub`) in the output location described in Host conventions and send it to the reader. **Never publish it online** (no public links, hosted pages, or repositories): the output contains the book's text and is a personal file only.
+```bash
+python3 <skill-dir>/scripts/build_epub.py bespoke-work/<book-slug> output/<file>.epub --title "<book title>" --lang zh
+```
+
+The script carries over the original cover, stylesheets, images and the footnotes of kept paragraphs, places each chapter guide after the heading and epigraph, writes `nav.xhtml` and `toc.ncx`, and checks that every document is well formed. Afterwards render one or two chapters (a headless browser is enough) and look at them.
+
+**Title and cover**: the book keeps its own title and cover. Do not add "bespoke", "量体裁书版" or similar to the title inside the book; strip marketing text some editions put in the title field. The file name may carry a marker if the reader wants one; by default use the plain title.
+
+**Delivery**: save as `<book title>.epub` in the output location described in Host conventions and send it to the reader. **Never publish it online** (no public links, hosted pages, or repositories): the output contains the book's text and is a personal file only.
 
 ## How to write the back-matter chapters
 
@@ -320,6 +365,10 @@ The script totals the length of R ranges; if it deviates from the target by more
 ## Annotation style
 
 Analytical, restrained, complete sentences. Stand above the content and analyze why the author thinks this way rather than restating content point by point. No dashes, no conversational filler, no jokes. Each annotation states its core judgment without walking through every supporting detail.
+
+## Revision mode
+
+When a reader brings back an earlier version with complaints ("still too long", "not enough help", "the cover is gone"), do not rerun the full calibration. Ask one batch about the changes only (new retention, hint depth, extras, whether to redo read chapters), keep what the reader did not question, and rebuild. If the earlier specs are gone, extract the book again and start from the state file or the reader's summary of past decisions.
 
 ## Feedback loop
 
@@ -336,3 +385,5 @@ After the reader finishes, if willing, collect with one multiple-choice batch: w
 - Mix AI extrapolation into the author's views.
 - Spoil anything in pre-reading mode.
 - Publish an output containing the book's text online.
+- Put a locator before every kept paragraph, or rename the book inside the EPUB.
+- Let a hint or annotation reveal what the reader has not reached, in pre-reading mode.
