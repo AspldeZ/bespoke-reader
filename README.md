@@ -73,29 +73,29 @@ Peter Watts, *Blindsight* (2006), Chinese translation by Hu Shu (Imaginist, 2021
 | Reader aids | 24 chapter guides, 180 skims, 250+ annotations, 17 Don't skip flags, 2 background cards, a character and term table, an after-reading page |
 | Estimated reading time | About 6.5 hours at 300 characters per minute, all annotations included |
 
-The screenshots below are real output from this run, unedited. The book is in Chinese, so the pages are too; the captions say what each one shows.
+The screenshots below come from this run. The reader read the Chinese translation, so the book's own paragraphs are in Chinese; everything the skill generated (guides, skims, notes, hints, cards) is shown here in English translation, rendered with the same build script and `--lang en`. Nothing else has been added or polished.
 
 **1. About this edition**: marker legend, suggested reading order, estimated time. Untouched paragraphs carry no number.
 
-<img src="examples/blindsight/01-about.png" width="560" alt="About this edition">
+<img src="examples/blindsight/01-about-en.png" width="560" alt="About this edition">
 
 **2. Background card**: one for each field the reader marked "only heard the term". The title itself names a real neurological phenomenon.
 
-<img src="examples/blindsight/02-background-card.png" width="560" alt="Background card">
+<img src="examples/blindsight/02-background-card-en.png" width="560" alt="Background card">
 
 **3. Characters and terms**: only what the opening chapters reveal.
 
-<img src="examples/blindsight/03-characters.png" width="560" alt="Characters and terms">
+<img src="examples/blindsight/03-characters-en.png" width="560" alt="Characters and terms">
 
 **4. Chapter guide, hint, skims and notes**: when the story jumps back to Earth, the guide says where we are; removed plot becomes a skim, so the story never breaks.
 
-<img src="examples/blindsight/04-guide-and-notes.png" width="560" alt="Chapter guide and notes">
+<img src="examples/blindsight/04-guide-and-notes-en.png" width="560" alt="Chapter guide and notes">
 
 **5. Don't skip and a core passage**: the passage carrying the book's central idea stays whole, and the notes add the real neuroscience behind it.
 
-<img src="examples/blindsight/05-key-passage.png" width="560" alt="Don't skip and notes">
+<img src="examples/blindsight/05-key-passage-en.png" width="560" alt="Don't skip and notes">
 
-What a route spec looks like (one per chapter: paragraph ranges, skims and notes, no book text): [examples/blindsight/route-spec-sample.txt](examples/blindsight/route-spec-sample.txt). It contains plot from Part Two.
+What a route spec looks like (one per chapter: paragraph ranges, skims and notes, no book text): [examples/blindsight/route-spec-sample.en.txt](examples/blindsight/route-spec-sample.en.txt) (English translation; the original is [route-spec-sample.txt](examples/blindsight/route-spec-sample.txt)). It contains plot from Part Two.
 
 ## Example 2: *Antifragile*
 
