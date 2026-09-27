@@ -1,0 +1,19 @@
+# Example: route spec for the chapter "Rorschach · 4" of Blindsight (text/ch018.txt). Paragraph ranges, skims and notes only, no text from the book. Format: bespoke-reader/scripts/spec_lib.py. This is an English translation; the reader's spec was in Chinese.
+T Rorschach · 4
+G The crew keep going down into Rorschach under heavy radiation, and the hallucinations follow them back to the ship. The first half of the chapter is a long reflection by Siri as he reads up: which "selves" and "meters" the brain contains, and what happens to a person when they break. It is the book's central theme in concentrated form and worth reading slowly. In the second half, Rorschach makes its first unmistakable move.
+R 1-2
+S 3-14 Over five orbits of Big Ben the crew go into Rorschach five times, are wrecked by radiation each time and repaired by the ship. The fields give them seizures, delirium and fits of laughter; Bates "finds God" twice, and her combat robots nearly go out of control. The Gang finds no language to decode, only Rorschach slowly growing and partitioning its tunnels; it grows eight percent in five orbits. Siri acts purely as a tool on site, trying not to influence any decision; his reports pile up but cannot be sent to Earth through the interference.
+R 15-18
+F 16
+N 16 This is the neuroscience behind blindsight: the brain contains an old, fast system that serves survival only; it sees, hears and reacts, but outside consciousness. When Szpindel reached for the battery, this is what saw it for him. Siri's line that "everyone has a simplified Gang of Four in their head" means we were never one unified "I" to begin with.
+N 18 The "God" here has a real basis too: stimulating the temporal lobe can induce intense religious experience. The Cotard's syndrome case descriptions are real as well.
+S 19-19 Agnosia, hemispatial neglect: a woman dies of thirst next to water because she cannot recognize the tap; a man cannot perceive the left half of the world and cannot even imagine the concept of "left".
+R 20-25
+N 20 Inattentional blindness is a real psychological effect. The best-known experiment is the "invisible gorilla": people counting passes in a basketball video, and about half of them miss a person in a gorilla suit walking through the middle of the scene. The author says one key feature of the scramblers comes from research like this.
+N 22 This passage states one of the book's core ideas: what we see is not the world but a model inside the brain, which the senses keep updating. When the model breaks, a person lives in a world detached from reality and does not notice.
+R 27-36
+S 37-47 Bates orders the robots to burn through the membrane with lasers, but its inner layer is a reflective fiber that shatters the beams and throws them back like buckshot. Siri is burned on his side and left arm; his suit seals the breach.
+R 48-67
+N 54 This is Michelle, from the Gang of Four, terrified like a little girl. Susan has "disappeared" for now.
+N 62 Michelle says the thing that grabbed her "can go invisible". Remember this line.
+N 64 An echo of what Szpindel said in Part One, chapter 7: "We may be the first to learn humanity's fate; that's already the semi-finals."

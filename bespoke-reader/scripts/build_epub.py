@@ -26,8 +26,8 @@ MARK = {
     'zh': {'guide': '〔导读〕', 'skim': '〔略读〕', 'cut': '〔删去 {n} 段：{r}〕', 'note': '〔批注〕',
            'hint': '〔提示〕', 'predict': '〔先想〕', 'flag': '〔别跳〕下面这段是本章的关键，请放慢读。',
            'toc': '目录', 'cover': '封面', 'break': '＊　＊　＊'},
-    'en': {'guide': '[Guide]', 'skim': '[Skim]', 'cut': '[Cut {n} ¶: {r}]', 'note': '[Note]',
-           'hint': '[Hint]', 'predict': '[Predict]', 'flag': "[Don't skip] The next passage is the key to this chapter; read it slowly.",
+    'en': {'guide': '[Guide]', 'skim': '[Skim] ', 'cut': '[Cut {n} ¶: {r}]', 'note': '[Note] ',
+           'hint': '[Hint] ', 'predict': '[Predict] ', 'flag': "[Don't skip] The next passage is the key to this chapter; read it slowly.",
            'toc': 'Contents', 'cover': 'Cover', 'break': '*   *   *'},
 }
 EXTRA_CSS = '''
